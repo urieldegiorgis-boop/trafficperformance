@@ -20,9 +20,9 @@ html,body{background:var(--bg);color:var(--t1);font-family:var(--font);font-size
 .logo span{font-family:'Georgia',serif;font-size:18px;font-weight:700;letter-spacing:.06em;color:#0f1220}
 .logo em{font-style:normal;color:var(--t3);font-family:var(--font);font-size:11px;font-weight:500;margin-left:8px}
 .nav{display:flex;gap:3px;flex:1;flex-wrap:wrap}
-.nav-btn{padding:6px 14px;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;color:var(--t2);background:none;border:none;font-family:var(--font);transition:all .12s}
-.nav-btn:hover{color:var(--t1);background:var(--bg3)}
-.nav-btn.act{color:#fff;background:var(--accent)}
+.nav-btn{padding:6px 14px;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;color:var(--t2);background:var(--bg2);border:1px solid var(--border2);font-family:var(--font);transition:all .12s}
+.nav-btn:hover{color:var(--t1);border-color:var(--t3)}
+.nav-btn.act{color:#fff;background:var(--accent);border-color:var(--accent)}
 .nav-cfg{padding:6px 12px;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;color:var(--t2);background:var(--bg3);border:1px solid var(--border2);font-family:var(--font)}
 .nav-cfg:hover{color:var(--t1)}
 .nav-btn-nueva{padding:6px 16px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;color:#0d0d0d;background:#4caf7d;border:none;font-family:var(--font);transition:all .12s}
@@ -33,6 +33,7 @@ html,body{background:var(--bg);color:var(--t1);font-family:var(--font);font-size
 /* FILTER CARD (como la captura) */
 .filter-card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:14px 16px}
 .ptabs{display:flex;gap:8px;flex-wrap:wrap}
+.cdate{padding:7px 10px;border-radius:8px;border:1px solid var(--border2);background:var(--bg2);color:var(--t1);font-family:var(--font);font-size:12px}
 .ptab{padding:8px 16px;border-radius:8px;font-size:12px;font-weight:500;cursor:pointer;border:1px solid var(--border2);background:var(--bg2);color:var(--t2);font-family:var(--font);transition:all .12s}
 .ptab:hover{color:#0f1220;border-color:var(--t3)}
 .ptab.act{background:#fff;color:#0d0d0d;border:2px solid var(--t1);font-weight:700}
@@ -171,14 +172,19 @@ table.entry input.nm{width:120px;text-align:left;font-weight:600}
   </div>
   <button class="nav-cfg" id="syncBtn">↻ Sincronizar Close</button>
   <button class="nav-cfg" id="cfgBtn">⚙ Configuración</button>
-  <button class="nav-btn-nueva" id="addBtn">+ Añadir semana</button>
 </div>
 
 <div class="view">
-  <div class="nostore" id="nostore">Este archivo se abrió fuera de Claude, así que los cambios <b>no se guardarán</b> al cerrar. Ábrelo dentro de Claude para conservar el histórico.</div>
+  <div class="nostore" id="nostore">No se pudo cargar el histórico guardado. Revisa que la función <b>/api/state</b> y las variables de Supabase estén configuradas en Vercel. Los cambios de esta sesión no se guardarán.</div>
 
   <div class="filter-card">
     <div class="ptabs" id="periodTabs"></div>
+    <div id="customRange" style="display:none;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap">
+      <input type="date" id="cFrom" class="cdate">
+      <span style="color:var(--t3);font-size:12px">a</span>
+      <input type="date" id="cTo" class="cdate">
+      <button id="cGo" class="ptab">Ver</button>
+    </div>
     <div class="frow2">
       <div class="fg"><label id="respLbl">Responsable</label><select id="respSel"></select></div>
       <button class="btn-limpiar" id="limpiarBtn">Limpiar</button>
@@ -262,20 +268,36 @@ const ENT={set:['persona','personas'],cold:['persona','personas'],vsl:['creativo
 const SEGCOLORS={Cierres:'#ef7c1f','Follow up':'#2563eb','Lost / Bad Fit':'#6070a0',Cancel:'#cc3333','No show':'#e0a23b',Pendientes:'#0d9488'};
 let DB={version:4,periods:[],roster:{set:[],cold:[]}}, mem=null;
 let curRole='set', curPeriodId=null, filterPerson='ALL', sortKey='cierres', sortDir=-1, editingId=null, mRole='set', chart=null;
+let activeRangeKey='this_month', booting=true;
 
 async function load(){
-  if(typeof window.storage==='undefined'){document.getElementById('nostore').style.display='block';return mem||null;}
-  try{const r=await window.storage.get(KEY);return r?JSON.parse(r.value):null;}catch(e){return null;}
+  // Dentro de Claude: almacenamiento de artefacto (preview).
+  if(typeof window.storage!=='undefined'){
+    try{const r=await window.storage.get(KEY);return r?JSON.parse(r.value):null;}catch(e){return null;}
+  }
+  // Desplegado en Vercel: persistencia real en Supabase vía /api/state.
+  try{
+    const r=await fetch('/api/state');
+    if(r.ok){const db=await r.json();return (db&&db.periods)?db:null;}
+  }catch(e){console.error('load /api/state',e);}
+  return mem||null;
 }
 async function save(){
-  if(typeof window.storage==='undefined'){mem=JSON.parse(JSON.stringify(DB));return;}
-  try{await window.storage.set(KEY,JSON.stringify(DB),false);}catch(e){console.error(e);}
+  if(typeof window.storage!=='undefined'){
+    try{await window.storage.set(KEY,JSON.stringify(DB),false);}catch(e){console.error(e);}
+    return;
+  }
+  mem=JSON.parse(JSON.stringify(DB)); // respaldo en memoria por si falla la red
+  try{
+    const r=await fetch('/api/state',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(DB)});
+    if(!r.ok)throw new Error('HTTP '+r.status);
+  }catch(e){console.error('save /api/state',e);if(!booting)document.getElementById('nostore').style.display='block';}
 }
 function seed(){
   const C=(ctd,depo,split,fu,lost,cancel,noshow,nr,reag)=>({ctd,depo,split,fu,lost,cancel,noshow,nr,reag});
   return {version:4,
     roster:{set:['Nico','Sonia','Ariel','Miguel','Gian Carlos','Iker'],cold:['Dani','Javier Aranda','Aaron','Airam','Alberto']},
-    periods:[{id:'p_jun2026',label:'Junio 2026',added:Date.now(),
+    periods:[{id:'p_2026-06',label:'Junio 2026',added:Date.now(),
     set:{'Nico':C(10,0,0,7,3,2,2,5,0),'Sonia':C(8,0,0,8,3,5,1,5,0),'Ariel':C(4,2,0,10,8,6,1,3,0),
       'Miguel':C(4,1,1,8,1,2,2,1,0),'Gian Carlos':C(1,0,0,8,0,1,0,2,1),'Iker':C(0,0,0,4,2,1,1,1,0)},
     cold:{'Dani':C(5,2,0,15,3,13,5,13,0),'Javier Aranda':C(3,0,0,6,4,6,6,7,1),'Aaron':C(2,0,0,3,0,4,0,16,0),
@@ -326,8 +348,18 @@ function normalizeCreatives(raw, minKeep){
   return out;
 }
 function periodsForRole(){return DB.periods.filter(p=>Object.keys(p[curRole]||{}).length);}
-function activePeriod(){const ps=periodsForRole();return ps.find(p=>p.id===curPeriodId)||ps[ps.length-1];}
-function prevPeriod(){const ps=periodsForRole();const i=ps.findIndex(p=>p.id===(activePeriod()||{}).id);return i>0?ps[i-1]:null;}
+function periodKind(id){if(/^p_w/.test(String(id)))return 'w';if(/^p_c/.test(String(id)))return 'c';return 'm';}
+function activePeriod(){
+  if(curPeriodId){const f=DB.periods.find(p=>p.id===curPeriodId);if(f)return f;}
+  if(activeRangeKey!=='custom'){const r=computeRange(activeRangeKey);const f=r&&DB.periods.find(p=>p.id===r.id);if(f)return f;}
+  const ps=periodsForRole();return ps[ps.length-1]||null;
+}
+function prevPeriod(){
+  const cur=activePeriod();if(!cur)return null;const k=periodKind(cur.id);
+  const same=DB.periods.filter(p=>periodKind(p.id)===k && Object.keys(p[curRole]||{}).length)
+    .sort((a,b)=>String(a.from||a.id)<String(b.from||b.id)?-1:1);
+  const i=same.findIndex(p=>p.id===cur.id);return i>0?same[i-1]:null;
+}
 function repEntries(p){const all=Object.entries(p[curRole]);return filterPerson==='ALL'?all:all.filter(([n])=>n===filterPerson);}
 function aggregate(p){
   let t={ag:0,cierres:0,realiz:0,noreal:0,pend:0,fu:0,lost:0,cancel:0,noshow:0,nr:0};
@@ -338,12 +370,37 @@ function aggregate(p){
   t.closer=t.realiz?t.cierres/t.realiz:null;t.conv=t.ag?t.cierres/t.ag:null;return t;
 }
 
+const MM=['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
+function ymd(d){return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
+function startOfWeek(d){const x=new Date(d);const day=(x.getDay()+6)%7;x.setDate(x.getDate()-day);x.setHours(0,0,0,0);return x;}
+function fmtShort(s){const a=s.split('-');return (+a[2])+' '+MM[(+a[1])-1];}
+function weekLabel(from){const e=new Date(from);e.setDate(e.getDate()+6);const a=from.getDate(),b=e.getDate();
+  return from.getMonth()===e.getMonth()?(a+'–'+b+' '+MM[e.getMonth()]):(a+' '+MM[from.getMonth()]+'–'+b+' '+MM[e.getMonth()]);}
+function computeRange(key,cf,ct){
+  const now=new Date();
+  if(key==='this_month'){const f=new Date(now.getFullYear(),now.getMonth(),1),t=new Date(now.getFullYear(),now.getMonth()+1,1);
+    return {key,from:ymd(f),to:ymd(t),id:'p_'+now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0'),label:['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'][now.getMonth()]+' '+now.getFullYear()};}
+  if(key==='this_week'){const f=startOfWeek(now),t=new Date(f);t.setDate(t.getDate()+7);
+    return {key,from:ymd(f),to:ymd(t),id:'p_w'+ymd(f),label:'Semana '+weekLabel(f)};}
+  if(key==='last_week'){const tw=startOfWeek(now),f=new Date(tw);f.setDate(f.getDate()-7);
+    return {key,from:ymd(f),to:ymd(tw),id:'p_w'+ymd(f),label:'Semana '+weekLabel(f)};}
+  if(key==='custom'){if(!cf||!ct)return null;const t=new Date(ct+'T00:00:00');t.setDate(t.getDate()+1);
+    return {key,from:cf,to:ymd(t),id:'p_c'+cf+'_'+ct,label:fmtShort(cf)+' – '+fmtShort(ct)};}
+}
 function renderTabs(){
-  const box=document.getElementById('periodTabs');const ps=periodsForRole();
-  if(!ps.find(p=>p.id===curPeriodId))curPeriodId=ps.length?ps[ps.length-1].id:null;
-  box.innerHTML=ps.map(p=>`<button class="ptab ${p.id===curPeriodId?'act':''}" data-id="${p.id}">${p.label}</button>`).join('')
-    || '<span style="font-size:11px;color:var(--t3)">Sin periodos · pulsa “+ Añadir semana”</span>';
-  box.querySelectorAll('.ptab').forEach(b=>b.onclick=()=>{curPeriodId=b.dataset.id;filterPerson='ALL';renderAll();});
+  const box=document.getElementById('periodTabs');
+  const defs=[['this_week','Esta semana'],['last_week','Semana pasada'],['this_month','Este mes'],['custom','Personalizado']];
+  box.innerHTML=defs.map(([k,l])=>`<button class="ptab ${k===activeRangeKey?'act':''}" data-range="${k}">${l}</button>`).join('');
+  document.getElementById('customRange').style.display=activeRangeKey==='custom'?'flex':'none';
+  box.querySelectorAll('.ptab').forEach(b=>b.onclick=()=>selectRange(b.dataset.range));
+}
+function selectRange(key){
+  activeRangeKey=key;
+  if(key==='custom'){renderTabs();return;}
+  const range=computeRange(key);
+  const ex=DB.periods.find(p=>p.id===range.id && Object.keys(p[curRole]||{}).length);
+  if(ex){curPeriodId=ex.id;filterPerson='ALL';renderAll();}
+  else{curPeriodId=null;renderTabs();syncRange(range);}
 }
 function renderResp(){
   const sel=document.getElementById('respSel');const p=activePeriod();
@@ -415,7 +472,7 @@ function renderLeaderboard(){
     ?(curRole==='vsl'
       ?'VSL puro = Source vsl, sin setter ni cold caller. Se llena desde Close al sincronizar.'
       :'VSL Total = todos los leads con Source vsl (puros + los trabajados por setter/cold caller). Se llena desde Close al sincronizar.')
-    :'No hay datos para este rol. Pulsa “+ Añadir semana”.';
+    :'No hay datos para este rol en este periodo. Pulsa “↻ Sincronizar Close”.';
     body.innerHTML='<div style="padding:24px;color:var(--t3);font-size:12px;line-height:1.6">'+msg+'</div>';return;}
   let rows=repEntries(p).map(([name,d])=>({name,fu:+d.fu||0,lost:+d.lost||0,cancel:+d.cancel||0,noshow:+d.noshow||0,nr:+d.nr||0,...metrics(d)}));
   const cols=[
@@ -507,32 +564,31 @@ async function addPerson(r){const inp=document.getElementById(r==='set'?'cfgSetI
 
 /* ----- sincronización con Close (función serverless en Vercel: /api/close) ----- */
 const MESES=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
-async function syncFromClose(monthStr){
+async function syncRange(range){
+  if(!range){range=activeRangeKey==='custom'?null:computeRange(activeRangeKey);}
+  if(!range){alert('Elige un rango de fechas.');return;}
   const btn=document.getElementById('syncBtn');const prev=btn.textContent;
-  if(!monthStr){const n=new Date();monthStr=n.getFullYear()+'-'+String(n.getMonth()+1).padStart(2,'0');}
   btn.textContent='Sincronizando…';btn.disabled=true;
   try{
-    const r=await fetch('/api/close?month='+encodeURIComponent(monthStr));
+    const r=await fetch('/api/close?from='+encodeURIComponent(range.from)+'&to='+encodeURIComponent(range.to));
     if(!r.ok) throw new Error('HTTP '+r.status);
-    const data=await r.json(); // {set,cold,vsl,crea}
-    const [y,m]=monthStr.split('-').map(Number);
-    const label=MESES[m-1]+' '+y;
-    let p=DB.periods.find(x=>x.label.toLowerCase()===label.toLowerCase());
-    if(!p){p={id:'p_'+monthStr,label,added:Date.now(),set:{},cold:{},vsl:{},vslt:{},crea:{}};DB.periods.push(p);}
+    const data=await r.json();
+    let p=DB.periods.find(x=>x.id===range.id);
+    if(!p){p={id:range.id,label:range.label,added:Date.now(),set:{},cold:{},vsl:{},vslt:{},crea:{}};DB.periods.push(p);}
+    p.label=range.label;p.from=range.from;p.to=range.to;
     p.set=data.set||{};p.cold=data.cold||{};
     p.vsl=normalizeCreatives(data.vsl||{});
     p.vslt=normalizeCreatives(data.vslt||{});
     p.crea=normalizeCreatives(data.crea||{});
     curPeriodId=p.id;filterPerson='ALL';
     await save();renderAll();
-    btn.textContent='✓ '+label;setTimeout(()=>{btn.textContent=prev;btn.disabled=false;},1800);
+    btn.textContent='✓ '+range.label;setTimeout(()=>{btn.textContent=prev;btn.disabled=false;},1600);
   }catch(e){
     btn.textContent=prev;btn.disabled=false;
-    alert('No se pudo sincronizar con Close.\n\nEsto funciona cuando el panel está desplegado en Vercel con la función /api/close y la variable CLOSE_API_KEY configurada. En local/Claude no hay backend.\n\nDetalle: '+e.message);
+    alert('No se pudo sincronizar con Close.\n\nFunciona cuando el panel está desplegado en Vercel con la función /api/close y la variable CLOSE_API_KEY configurada. En local no hay backend.\n\nDetalle: '+e.message);
   }
 }
 
-document.getElementById('addBtn').onclick=()=>openModal(null);
 document.getElementById('closeX').onclick=closeModal;
 document.getElementById('cancelM').onclick=closeModal;
 document.getElementById('saveM').onclick=saveModal;
@@ -543,26 +599,40 @@ document.getElementById('limpiarBtn').onclick=()=>{filterPerson='ALL';curPeriodI
 document.querySelectorAll('#mRole button').forEach(b=>b.onclick=()=>{setMRole(b.dataset.role);if(!editingId)prefill();});
 document.querySelectorAll('#roleNav .nav-btn').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('#roleNav .nav-btn').forEach(x=>x.classList.remove('act'));
-  b.classList.add('act');curRole=b.dataset.role;curPeriodId=null;filterPerson='ALL';renderAll();});
+  b.classList.add('act');curRole=b.dataset.role;filterPerson='ALL';renderAll();});
+document.getElementById('cGo').onclick=()=>{
+  const cf=document.getElementById('cFrom').value, ct=document.getElementById('cTo').value;
+  if(!cf||!ct){alert('Elige fecha de inicio y fin.');return;}
+  if(cf>ct){alert('La fecha de inicio es posterior a la de fin.');return;}
+  const range=computeRange('custom',cf,ct);
+  const ex=DB.periods.find(p=>p.id===range.id && Object.keys(p[curRole]||{}).length);
+  if(ex){curPeriodId=ex.id;filterPerson='ALL';renderAll();}else{curPeriodId=null;syncRange(range);}
+};
 document.getElementById('lbTitle').style.cursor='pointer';
 document.getElementById('lbTitle').onclick=()=>{const p=activePeriod();if(p)openModal(p.id);};
 document.getElementById('cfgBtn').onclick=openCfg;
-document.getElementById('syncBtn').onclick=()=>syncFromClose();
+document.getElementById('syncBtn').onclick=()=>syncRange();
 document.getElementById('cfgX').onclick=closeCfg;
 document.getElementById('cfgClose').onclick=closeCfg;
 document.getElementById('cfgOv').onclick=e=>{if(e.target.id==='cfgOv')closeCfg();};
 document.querySelectorAll('.cfg-add button').forEach(b=>b.onclick=()=>addPerson(b.dataset.r));
 document.querySelectorAll('.cfg-add input').forEach(inp=>inp.addEventListener('keydown',e=>{if(e.key==='Enter')addPerson(inp.id==='cfgSetInput'?'set':'cold');}));
 
-(async function(){let s=await load();DB=(s&&s.periods)?s:seed();
+(async function(){let s=await load();const hasData=s&&Array.isArray(s.periods)&&s.periods.length;DB=hasData?s:seed();
   if(!DB.roster){DB.roster={set:[],cold:[]};['set','cold'].forEach(r=>{const set=new Set();DB.periods.forEach(p=>Object.keys(p[r]||{}).forEach(n=>set.add(n)));DB.roster[r]=[...set];});}
-  let changed=!s;const sd=seed();
+  let changed=!hasData;const sd=seed();
   DB.periods.forEach(p=>{['set','cold','vsl','vslt','crea'].forEach(r=>{if(!p[r])p[r]={};});
     // versión previa guardaba los creativos en 'vsl' -> moverlos a 'crea'
     if(Object.keys(p.crea).length===0 && Object.keys(p.vsl).length>0){p.crea=p.vsl;p.vsl={};changed=true;}});
-  const jun=DB.periods.find(p=>p.id==='p_jun2026');
+  const jun=DB.periods.find(p=>p.id==='p_2026-06');
   if(jun && Object.keys(jun.crea||{}).length===0){jun.crea=sd.periods[0].crea;changed=true;}
-  if(changed)await save();renderAll();})();
+  // periodo activo por defecto: "Este mes" si ya está guardado
+  activeRangeKey='this_month';
+  const tm=computeRange('this_month');
+  curPeriodId=(tm && DB.periods.find(p=>p.id===tm.id))?tm.id:(DB.periods.length?DB.periods[DB.periods.length-1].id:null);
+  if(changed)await save();
+  booting=false;
+  renderAll();})();
 </script>
 </body>
 </html>
