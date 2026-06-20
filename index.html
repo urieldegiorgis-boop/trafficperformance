@@ -519,20 +519,24 @@ function downloadPDF(){
   const {label,role,entCol,rows,cols,T,tS,tConv}=lastLB;
   const pp=s=>String(s).replace('—','-');
   const doc=new jsPDF({orientation:'landscape',unit:'pt',format:'a4'});
-  doc.setFont('helvetica','bold');doc.setFontSize(15);doc.text('LATHOS — Rendimiento',40,38);
+  const pageW=doc.internal.pageSize.getWidth();const M=40;const avail=pageW-M*2;
+  doc.setFont('helvetica','bold');doc.setFontSize(15);doc.text('LATHOS — Rendimiento',pageW/2,38,{align:'center'});
   doc.setFont('helvetica','normal');doc.setFontSize(10);doc.setTextColor(110);
-  doc.text(role+'  ·  '+label,40,54);
-  doc.text('Generado '+new Date().toLocaleDateString('es-ES'),40,67);
+  doc.text(role+'  ·  '+label,pageW/2,54,{align:'center'});
+  doc.text('Generado '+new Date().toLocaleDateString('es-ES'),pageW/2,67,{align:'center'});
   doc.setTextColor(0);
   const head=[[entCol,...cols.map(c=>c.h)]];
   const body=rows.map((r,i)=>[(i+1)+'. '+r.name,...cols.map(c=>c.pct?pp(pct(r[c.k])):String(r[c.k]))]);
   const foot=[['TOTAL',...cols.map(c=>c.k==='show'?pp(pct(tS)):c.k==='conv'?pp(pct(tConv)):String(T[c.k]??''))]];
-  doc.autoTable({startY:80,head,body,foot,theme:'grid',
-    styles:{fontSize:8,cellPadding:3,overflow:'linebreak'},
-    headStyles:{fillColor:[26,27,46],textColor:255,fontSize:8},
-    footStyles:{fillColor:[238,238,240],textColor:20,fontStyle:'bold'},
-    columnStyles:{0:{cellWidth:140,halign:'left'}},
-    margin:{left:40,right:40}});
+  const nameW=130;const colW=(avail-nameW)/cols.length;
+  const columnStyles={0:{cellWidth:nameW,halign:'left'}};
+  cols.forEach((c,i)=>columnStyles[i+1]={cellWidth:colW,halign:'center'});
+  doc.autoTable({startY:82,head,body,foot,theme:'grid',tableWidth:avail,
+    styles:{fontSize:8,cellPadding:3,overflow:'linebreak',halign:'center',valign:'middle'},
+    headStyles:{fillColor:[26,27,46],textColor:255,fontSize:8,halign:'center'},
+    footStyles:{fillColor:[238,238,240],textColor:20,fontStyle:'bold',halign:'center'},
+    columnStyles,
+    margin:{left:M,right:M}});
   const slug=s=>s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,'_').replace(/^_|_$/g,'');
   doc.save('lathos_'+slug(role)+'_'+slug(label)+'.pdf');
 }
