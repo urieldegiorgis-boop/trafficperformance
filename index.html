@@ -69,6 +69,8 @@ select:focus{border-color:var(--accent)}
 .card-head{display:flex;align-items:center;justify-content:space-between;padding:11px 16px;background:var(--navy);border-bottom:1px solid var(--navy-b)}
 .card-title{font-size:10px;font-weight:700;color:#fff;text-transform:uppercase;letter-spacing:.5px}
 .card-head .hint{font-size:10px;color:rgba(255,255,255,.6)}
+.dlbtn{font-size:10px;font-weight:600;color:#fff;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.3);border-radius:6px;padding:4px 10px;cursor:pointer;font-family:var(--font);text-transform:uppercase;letter-spacing:.5px}
+.dlbtn:hover{background:rgba(255,255,255,.22)}
 .card-body{padding:14px 16px;flex:1}
 
 .donut-box{position:relative;width:100%;height:190px;display:flex;align-items:center;justify-content:center}
@@ -158,6 +160,8 @@ table.entry input.nm{width:120px;text-align:left;font-weight:600}
 .cfg-add button{background:var(--accent);color:#fff;border:none;border-radius:6px;padding:7px 12px;font-weight:600;cursor:pointer;font-family:var(--font)}
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
 </head>
 <body>
 
@@ -208,7 +212,7 @@ table.entry input.nm{width:120px;text-align:left;font-weight:600}
   </div>
 
   <div class="card">
-    <div class="card-head"><span class="card-title" id="lbTitle">Leaderboard</span>
+    <div class="card-head"><div style="display:flex;align-items:center;gap:10px"><span class="card-title" id="lbTitle">Leaderboard</span><button id="dlBtn" class="dlbtn">⬇ Descargar PDF</button></div>
       <span class="hint">Clic en columna para ordenar · clic en título para editar</span></div>
     <div class="tbl-wrap" id="lbBody"></div>
   </div>
@@ -268,7 +272,7 @@ const ENT={set:['persona','personas'],cold:['persona','personas'],vsl:['creativo
 const SEGCOLORS={Cierres:'#ef7c1f','Follow up':'#2563eb','Lost / Bad Fit':'#6070a0',Cancel:'#cc3333','No show':'#e0a23b',Pendientes:'#0d9488'};
 let DB={version:4,periods:[],roster:{set:[],cold:[]}}, mem=null;
 let curRole='set', curPeriodId=null, filterPerson='ALL', sortKey='cierres', sortDir=-1, editingId=null, mRole='set', chart=null;
-let activeRangeKey='this_month', booting=true;
+let activeRangeKey='this_month', booting=true, lastLB=null;
 
 async function load(){
   // Dentro de Claude: almacenamiento de artefacto (preview).
@@ -503,10 +507,35 @@ function renderLeaderboard(){
     else if(c.cls==='money')h+=`<td><span class="money">${T[c.k]}</span></td>`;else h+=`<td>${T[c.k]}</td>`;});
   h+='</tr></tbody></table>';
   body.innerHTML=h;
+  lastLB={label:p.label,role:ROLES[curRole],entCol,rows:rows.slice(),cols,T:Object.assign({},T),tS,tConv};
   body.querySelectorAll('th').forEach(th=>th.onclick=()=>{const k=th.dataset.k;if(!k)return;
     if(sortKey===k)sortDir*=-1;else{sortKey=k;sortDir=(k==='name')?1:-1;}renderLeaderboard();});
 }
 function renderAll(){renderTabs();renderResp();renderKPIs();renderConv();renderDonut();renderLeaderboard();}
+function downloadPDF(){
+  if(!lastLB){alert('No hay tabla que descargar todavía.');return;}
+  if(!(window.jspdf&&window.jspdf.jsPDF)){alert('No se pudo cargar el generador de PDF (revisa la conexión).');return;}
+  const {jsPDF}=window.jspdf;
+  const {label,role,entCol,rows,cols,T,tS,tConv}=lastLB;
+  const pp=s=>String(s).replace('—','-');
+  const doc=new jsPDF({orientation:'landscape',unit:'pt',format:'a4'});
+  doc.setFont('helvetica','bold');doc.setFontSize(15);doc.text('LATHOS — Rendimiento',40,38);
+  doc.setFont('helvetica','normal');doc.setFontSize(10);doc.setTextColor(110);
+  doc.text(role+'  ·  '+label,40,54);
+  doc.text('Generado '+new Date().toLocaleDateString('es-ES'),40,67);
+  doc.setTextColor(0);
+  const head=[[entCol,...cols.map(c=>c.h)]];
+  const body=rows.map((r,i)=>[(i+1)+'. '+r.name,...cols.map(c=>c.pct?pp(pct(r[c.k])):String(r[c.k]))]);
+  const foot=[['TOTAL',...cols.map(c=>c.k==='show'?pp(pct(tS)):c.k==='conv'?pp(pct(tConv)):String(T[c.k]??''))]];
+  doc.autoTable({startY:80,head,body,foot,theme:'grid',
+    styles:{fontSize:8,cellPadding:3,overflow:'linebreak'},
+    headStyles:{fillColor:[26,27,46],textColor:255,fontSize:8},
+    footStyles:{fillColor:[238,238,240],textColor:20,fontStyle:'bold'},
+    columnStyles:{0:{cellWidth:140,halign:'left'}},
+    margin:{left:40,right:40}});
+  const slug=s=>s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,'_').replace(/^_|_$/g,'');
+  doc.save('lathos_'+slug(role)+'_'+slug(label)+'.pdf');
+}
 
 function newRow(name='',d={}){
   const tr=document.createElement('tr');
@@ -609,6 +638,7 @@ document.getElementById('cGo').onclick=()=>{
   if(ex){curPeriodId=ex.id;filterPerson='ALL';renderAll();}else{curPeriodId=null;syncRange(range);}
 };
 document.getElementById('lbTitle').style.cursor='pointer';
+document.getElementById('dlBtn').onclick=downloadPDF;
 document.getElementById('lbTitle').onclick=()=>{const p=activePeriod();if(p)openModal(p.id);};
 document.getElementById('cfgBtn').onclick=openCfg;
 document.getElementById('syncBtn').onclick=()=>syncRange();
