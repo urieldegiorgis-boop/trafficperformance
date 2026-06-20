@@ -326,25 +326,25 @@ function metrics(d){
 }
 const pct=v=>v==null?'—':Math.round(v*100)+'%';
 // Normaliza un mapa crudo de UTM terms {nombreCrudo:{counts}} -> limpio:
-// quita prefijos, fusiona variantes (mayúsculas/guiones), descarta basura y agrupa la cola larga en "Otros".
-function normalizeCreatives(raw, minKeep){
-  minKeep=minKeep||3;
-  const JUNK=/^(_+|-+|sin utm|n\/a|na|null|undefined|\{\{.*\}\})$/i;
+// quita el prefijo "Single Video -" y fusiona variantes de mayúsculas/guiones del MISMO nombre.
+// Cada UTM con cualquier valor (incluidos "_____", "{{ad.name}}", IDs) sale como fila propia.
+// Solo las UTM realmente vacías van a "(sin nombrar)".
+function normalizeCreatives(raw){
   const merged={};const display={};
   Object.entries(raw||{}).forEach(([name,d])=>{
     let nm=String(name||'').replace(/^single video\s*-\s*/i,'').replace(/\s+/g,' ').trim();
-    if(!nm||JUNK.test(nm)||/^\d{6,}$/.test(nm)) nm='(sin nombrar)';
-    const key=nm.toLowerCase().replace(/[^a-z0-9]/g,'');
+    if(!nm) nm='(sin nombrar)';
+    const alnum=nm.toLowerCase().replace(/[^a-z0-9]/g,'');
+    const key=alnum||nm.toLowerCase();
     if(!merged[key]){merged[key]={};display[key]=nm;}
     FIELDS.forEach(f=>merged[key][f]=(merged[key][f]||0)+(+d[f]||0));
   });
-  const out={};let otros={};let hasOtros=false;
+  const out={};let vacio={};let hasVacio=false;
   Object.keys(merged).forEach(k=>{
-    const ag=FIELDS.reduce((s,f)=>s+(merged[k][f]||0),0);
-    if(ag>=minKeep && display[k]!=='(sin nombrar)') out[display[k]]=merged[k];
-    else{hasOtros=true;FIELDS.forEach(f=>otros[f]=(otros[f]||0)+(merged[k][f]||0));}
+    if(display[k]!=='(sin nombrar)') out[display[k]]=merged[k];
+    else{hasVacio=true;FIELDS.forEach(f=>vacio[f]=(vacio[f]||0)+(merged[k][f]||0));}
   });
-  if(hasOtros) out['Otros']=otros;
+  if(hasVacio) out['(sin nombrar)']=vacio;
   return out;
 }
 function periodsForRole(){return DB.periods.filter(p=>Object.keys(p[curRole]||{}).length);}
