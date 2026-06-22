@@ -158,6 +158,19 @@ table.entry input.nm{width:120px;text-align:left;font-weight:600}
 .cfg-add{display:flex;gap:6px;margin-top:8px}
 .cfg-add input{flex:1;background:#fff;border:1px solid var(--border2);color:var(--t1);padding:7px 9px;border-radius:6px;font-size:12px;font-family:var(--font);outline:none}
 .cfg-add button{background:var(--accent);color:#fff;border:none;border-radius:6px;padding:7px 12px;font-weight:600;cursor:pointer;font-family:var(--font)}
+/* desplegable de leads por persona/creativo */
+.nameclk{cursor:pointer}
+.nameclk:hover{text-decoration:underline}
+.chev{font-size:9px;color:var(--t3);transition:transform .15s;display:inline-block}
+tr.open .chev{transform:rotate(90deg)}
+.lead-det>td{background:#f7f9fc;padding:0 14px 12px}
+.det-cap{font-size:10px;color:var(--t3);text-transform:uppercase;letter-spacing:.5px;padding:8px 2px 4px;font-weight:700}
+.det-tbl{width:100%;border-collapse:collapse;font-size:11.5px}
+.det-tbl th{text-align:left;color:var(--t3);font-weight:600;padding:5px 8px;border-bottom:1px solid #e6ebf2;text-transform:uppercase;font-size:9.5px;letter-spacing:.4px}
+.det-tbl td{padding:5px 8px;border-bottom:1px solid #eef2f7;vertical-align:top}
+.det-tbl a{color:var(--accent);text-decoration:none;white-space:nowrap}
+.det-tbl .muted{color:var(--t3)}
+.det-empty{padding:10px 2px;color:var(--t3);font-size:12px}
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
@@ -270,6 +283,8 @@ const FIELDS=['ctd','depo','split','fu','lost','cancel','noshow','nr','reag'];
 const ROLES={set:'Setters',cold:'Cold Callers',vsl:'VSL puro',vslt:'VSL Total',crea:'Creativos'};
 const ENT={set:['persona','personas'],cold:['persona','personas'],vsl:['creativo','creativos'],vslt:['creativo','creativos'],crea:['creativo','creativos']};
 const SEGCOLORS={Cierres:'#ef7c1f','Follow up':'#2563eb','Lost / Bad Fit':'#6070a0',Cancel:'#cc3333','No show':'#e0a23b',Pendientes:'#0d9488'};
+const STLABEL={ctd:'Close the Deal',depo:'Depósito',split:'Split Pay',fu:'Follow up',lost:'Lost / Bad Fit',cancel:'Cancel',noshow:'No show',nr:'Nueva Reserva',reag:'Reagendado'};
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 let DB={version:4,periods:[],roster:{set:[],cold:[]}}, mem=null;
 let curRole='set', curPeriodId=null, filterPerson='ALL', sortKey='cierres', sortDir=-1, editingId=null, mRole='set', chart=null;
 let activeRangeKey='this_month', booting=true, lastLB=null;
@@ -350,6 +365,34 @@ function normalizeCreatives(raw){
   });
   if(hasVacio) out['(sin nombrar)']=vacio;
   return out;
+}
+// Normaliza el detalle (listas de leads) de creativos con la MISMA clave que normalizeCreatives,
+// concatenando los arrays de cada variante bajo el nombre de display.
+function normDet(raw){
+  const merged={},display={};
+  Object.entries(raw||{}).forEach(([name,arr])=>{
+    let nm=String(name||'').replace(/^single video\s*-\s*/i,'').replace(/\s+/g,' ').trim();
+    if(!nm) nm='(sin nombrar)';
+    const alnum=nm.toLowerCase().replace(/[^a-z0-9]/g,'');const key=alnum||nm.toLowerCase();
+    if(!merged[key]){merged[key]=[];display[key]=nm;}
+    merged[key]=merged[key].concat(arr||[]);
+  });
+  const out={};Object.keys(merged).forEach(k=>{out[display[k]]=merged[k];});
+  return out;
+}
+function leadDetailFor(p,name){const d=p&&p.det&&p.det[curRole];if(!d)return null;return d[name]||[];}
+function leadDetailHTML(p,name){
+  const arr=leadDetailFor(p,name);
+  if(arr===null)return '<div class="det-empty">Sin detalle guardado para este periodo. Pulsa “↻ Sincronizar Close” para traer la lista de leads.</div>';
+  if(!arr.length)return '<div class="det-empty">Sin leads para mostrar.</div>';
+  const head='<tr><th>Lead</th><th>Email / Tel.</th><th>Estado</th><th>Call Date</th><th></th></tr>';
+  const body=arr.map(L=>{
+    const contacto=L.e?esc(L.e):(L.p?('📞 '+esc(L.p)):'<span class="muted">— sin email</span>');
+    const est=STLABEL[L.st]||esc(L.st||'—');
+    const link=L.url?`<a href="${esc(L.url)}" target="_blank" rel="noopener">abrir ↗</a>`:'';
+    return `<tr><td>${esc(L.n||'—')}</td><td>${contacto}</td><td>${est}</td><td>${esc(L.dt||'—')}</td><td>${link}</td></tr>`;
+  }).join('');
+  return `<div class="det-cap">${arr.length} lead(s)</div><table class="det-tbl"><thead>${head}</thead><tbody>${body}</tbody></table>`;
 }
 function periodsForRole(){return DB.periods.filter(p=>Object.keys(p[curRole]||{}).length);}
 function periodKind(id){if(/^p_w/.test(String(id)))return 'w';if(/^p_c/.test(String(id)))return 'c';return 'm';}
@@ -492,13 +535,15 @@ function renderLeaderboard(){
   let h='<table class="tbl"><thead><tr><th data-k="name">'+entCol+' '+arr('name')+'</th>';
   cols.forEach(c=>h+=`<th data-k="${c.k}">${c.h} ${arr(c.k)}</th>`);
   h+='</tr></thead><tbody>';
-  rows.forEach((r,i)=>{h+=`<tr><td><span class="rank ${i===0?'r1':''}">${i+1}</span><span class="name">${r.name}</span></td>`;
+  const ncols=cols.length+1;
+  rows.forEach((r,i)=>{h+=`<tr class="lb-row"><td><span class="rank ${i===0?'r1':''}">${i+1}</span><span class="name nameclk" title="Ver leads">${esc(r.name)} <span class="chev">▸</span></span></td>`;
     cols.forEach(c=>{
       if(c.bar){const w=r.show!=null?Math.round(r.show*100):0;h+=`<td><span class="bar"><i style="width:${w}%"></i></span><span class="pct">${pct(r.show)}</span></td>`;}
       else if(c.pct) h+=`<td class="${c.cls||'muted'}">${pct(r[c.k])}</td>`;
       else if(c.cls==='money') h+=`<td><span class="money">${r[c.k]}</span></td>`;
       else h+=`<td class="muted">${r[c.k]}</td>`;});
-    h+='</tr>';});
+    h+='</tr>';
+    h+=`<tr class="lead-det" style="display:none"><td colspan="${ncols}">${leadDetailHTML(p,r.name)}</td></tr>`;});
   let T={ag:0,realiz:0,cierres:0,fu:0,lost:0,cancel:0,noshow:0,noreal:0,nr:0};
   rows.forEach(r=>{Object.keys(T).forEach(k=>T[k]+=r[k]);});
   const tS=T.ag?T.realiz/T.ag:null,tConv=T.ag?T.cierres/T.ag:null;
@@ -508,6 +553,8 @@ function renderLeaderboard(){
   h+='</tr></tbody></table>';
   body.innerHTML=h;
   lastLB={label:p.label,role:ROLES[curRole],entCol,rows:rows.slice(),cols,T:Object.assign({},T),tS,tConv};
+  body.querySelectorAll('.nameclk').forEach(el=>el.onclick=()=>{const row=el.closest('tr');const det=row.nextElementSibling;
+    if(det&&det.classList.contains('lead-det')){const show=det.style.display==='none';det.style.display=show?'':'none';row.classList.toggle('open',show);}});
   body.querySelectorAll('th').forEach(th=>th.onclick=()=>{const k=th.dataset.k;if(!k)return;
     if(sortKey===k)sortDir*=-1;else{sortKey=k;sortDir=(k==='name')?1:-1;}renderLeaderboard();});
 }
@@ -613,6 +660,8 @@ async function syncRange(range){
     p.vsl=normalizeCreatives(data.vsl||{});
     p.vslt=normalizeCreatives(data.vslt||{});
     p.crea=normalizeCreatives(data.crea||{});
+    const dd=data.det||{};
+    p.det={set:dd.set||{},cold:dd.cold||{},vsl:normDet(dd.vsl||{}),vslt:normDet(dd.vslt||{}),crea:normDet(dd.crea||{})};
     curPeriodId=p.id;filterPerson='ALL';
     await save();renderAll();
     btn.textContent='✓ '+range.label;setTimeout(()=>{btn.textContent=prev;btn.disabled=false;},1600);
@@ -655,7 +704,7 @@ document.querySelectorAll('.cfg-add input').forEach(inp=>inp.addEventListener('k
 (async function(){let s=await load();const hasData=s&&Array.isArray(s.periods)&&s.periods.length;DB=hasData?s:seed();
   if(!DB.roster){DB.roster={set:[],cold:[]};['set','cold'].forEach(r=>{const set=new Set();DB.periods.forEach(p=>Object.keys(p[r]||{}).forEach(n=>set.add(n)));DB.roster[r]=[...set];});}
   let changed=!hasData;const sd=seed();
-  DB.periods.forEach(p=>{['set','cold','vsl','vslt','crea'].forEach(r=>{if(!p[r])p[r]={};});
+  DB.periods.forEach(p=>{['set','cold','vsl','vslt','crea'].forEach(r=>{if(!p[r])p[r]={};});if(!p.det)p.det={};
     // versión previa guardaba los creativos en 'vsl' -> moverlos a 'crea'
     if(Object.keys(p.crea).length===0 && Object.keys(p.vsl).length>0){p.crea=p.vsl;p.vsl={};changed=true;}});
   const jun=DB.periods.find(p=>p.id==='p_2026-06');
