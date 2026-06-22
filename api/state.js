@@ -9,6 +9,9 @@
 // Las tablas (ya creadas):
 //   lathos_periods(month text pk, label text, data jsonb, updated_at timestamptz)
 //   lathos_meta(id text pk, roster jsonb, version int, updated_at timestamptz)
+//
+// NOTA: el detalle de leads (data.det) se guarda dentro del jsonb `data`, así que
+// no hace falta tocar el esquema de Supabase: cabe tal cual en la columna existente.
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SERVICE_KEY  = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -86,6 +89,7 @@ module.exports = async (req, res) => {
             vsl:  p.vsl  || {},
             vslt: p.vslt || {},
             crea: p.crea || {},
+            det:  p.det  || {},   // detalle de leads por persona/creativo (para el desplegable)
             added: p.added,
           },
           updated_at: now,

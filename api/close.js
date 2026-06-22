@@ -5,6 +5,8 @@
 //   vsl  = leads con Source=vsl Y SIN setter Y SIN cold caller, por creativo (UTM term) × estado  (VSL puro)
 //   vslt = leads con Source=vsl (todos: puros + trabajados por setter/cold), por creativo × estado (VSL Total)
 //   crea = leads por creativo (UTM term), TODAS las fuentes       × estado
+// Además, devuelve `det`: la LISTA de leads (nombre, email/teléfono, estado, call date, enlace)
+// por cada clave de cada segmento, para poder desplegarla al pulsar un nombre en el panel.
 // Se ignoran estados que no son de llamada (Nuevo Optin, Repesca, Oferta #1, Refund...).
 //
 // Requiere la variable de entorno CLOSE_API_KEY (Settings → Environment Variables en Vercel).
@@ -43,11 +45,30 @@ function bump(map, key, bucket) {
   if (!map[key]) map[key] = blank();
   map[key][bucket] += 1;
 }
+// Empuja un registro de lead (detalle) en la lista de esa clave.
+function pushDet(map, key, rec) {
+  if (!key) key = '(sin nombrar)';
+  if (!map[key]) map[key] = [];
+  map[key].push(rec);
+}
 function getCustom(lead, id) {
   // Close devuelve los custom como "custom.cf_xxx" (o anidados en "custom").
   const v = lead['custom.' + id] ?? (lead.custom && lead.custom[id]);
   if (v == null) return '';
   return Array.isArray(v) ? String(v[0] ?? '') : String(v);
+}
+// Saca el primer email y el primer teléfono de los contactos del lead.
+// Muchos leads son de WhatsApp y NO tienen email: en ese caso email queda vacío
+// y el panel mostrará el teléfono como alternativa.
+function leadEmailPhone(lead) {
+  let email = '', phone = '';
+  const cs = Array.isArray(lead.contacts) ? lead.contacts : [];
+  for (const c of cs) {
+    if (!email && Array.isArray(c.emails) && c.emails.length) email = c.emails[0].email || '';
+    if (!phone && Array.isArray(c.phones) && c.phones.length) phone = c.phones[0].phone || '';
+    if (email && phone) break;
+  }
+  return { email, phone };
 }
 
 module.exports = async (req, res) => {
@@ -70,10 +91,7 @@ module.exports = async (req, res) => {
     end = m === 12 ? `${y + 1}-01-01` : `${y}-${String(m + 1).padStart(2, '0')}-01`;
   }
 
-  // Query: leads con Call Date dentro del mes.
-  // NOTA sobre la condición de fecha: si tu Close usara otra sintaxis y diera error,
-  // abre la página de Leads, filtra "Call Date = este mes", menú ··· → "Copy Filters",
-  // y pega ese objeto "query" aquí dentro.
+  // Query: leads con Call Date dentro del rango.
   const query = {
     type: 'and',
     queries: [
@@ -92,13 +110,15 @@ module.exports = async (req, res) => {
 
   const authHeader = 'Basic ' + Buffer.from(apiKey + ':').toString('base64');
   const out = { set:{}, cold:{}, vsl:{}, vslt:{}, crea:{} };
+  const det = { set:{}, cold:{}, vsl:{}, vslt:{}, crea:{} };
   let cursor = null, guard = 0;
 
   try {
     do {
       const body = {
         query,
-        _fields: { lead: ['id', 'status_id', 'custom'] },
+        // display_name = nombre del lead; contacts = para sacar email/teléfono.
+        _fields: { lead: ['id', 'display_name', 'status_id', 'custom', 'contacts'] },
         _limit: 200,
       };
       if (cursor) body.cursor = cursor;
@@ -120,17 +140,29 @@ module.exports = async (req, res) => {
         const cold   = getCustom(lead, F.coldCaller).trim();
         const term   = getCustom(lead, F.utmTerm).trim();
         const source = getCustom(lead, F.source).trim().toLowerCase();
-        if (setter) bump(out.set, setter, bucket);
-        if (cold)   bump(out.cold, cold, bucket);
-        if (!setter && !cold && source === 'vsl') bump(out.vsl, term, bucket); // VSL puro (Source vsl, sin setter ni cold caller)
-        if (source === 'vsl') bump(out.vslt, term, bucket); // VSL Total (todos los Source vsl)
-        bump(out.crea, term, bucket);                       // Creativos (todas las fuentes)
+
+        // Registro de detalle para este lead (mismo lead puede ir a varios segmentos).
+        const { email, phone } = leadEmailPhone(lead);
+        const rec = {
+          n: lead.display_name || '(sin nombre)',
+          e: email,
+          p: phone,
+          st: bucket,
+          dt: getCustom(lead, F.callDate) || '',
+          url: 'https://app.close.com/lead/' + lead.id + '/',
+        };
+
+        if (setter) { bump(out.set, setter, bucket); pushDet(det.set, setter, rec); }
+        if (cold)   { bump(out.cold, cold, bucket);  pushDet(det.cold, cold, rec); }
+        if (!setter && !cold && source === 'vsl') { bump(out.vsl, term, bucket); pushDet(det.vsl, term, rec); } // VSL puro
+        if (source === 'vsl') { bump(out.vslt, term, bucket); pushDet(det.vslt, term, rec); }                   // VSL Total
+        bump(out.crea, term, bucket); pushDet(det.crea, term, rec);                                             // Creativos (todas las fuentes)
       }
       cursor = json.cursor;
     } while (cursor && ++guard < 60); // hasta ~12.000 leads/mes
 
     res.setHeader('Cache-Control', 's-maxage=120, stale-while-revalidate=600');
-    return res.status(200).json({ from: start, to: end, ...out });
+    return res.status(200).json({ from: start, to: end, ...out, det });
   } catch (e) {
     return res.status(500).json({ error: 'Fallo al consultar Close', detail: String(e).slice(0, 500) });
   }
