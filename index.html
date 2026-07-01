@@ -651,8 +651,18 @@ async function addPerson(r){const inp=document.getElementById(r==='set'?'cfgSetI
 
 /* ----- sincronización con Close (función serverless en Vercel: /api/close) ----- */
 const MESES=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+// Resuelve el rango a re-sincronizar cuando estás en "Personalizado":
+// 1º usa las fechas que tengas escritas; si no, el periodo activo; si no, las parsea de su id.
+function customRangeForSync(){
+  const cf=document.getElementById('cFrom').value, ct=document.getElementById('cTo').value;
+  if(cf&&ct) return computeRange('custom',cf,ct);
+  const ap=activePeriod();
+  if(ap&&ap.from&&ap.to) return {key:'custom',id:ap.id,label:ap.label||ap.id,from:ap.from,to:ap.to};
+  if(ap&&/^p_c/.test(String(ap.id))){const m=String(ap.id).match(/^p_c(\d{4}-\d{2}-\d{2})_(\d{4}-\d{2}-\d{2})$/);if(m)return computeRange('custom',m[1],m[2]);}
+  return null;
+}
 async function syncRange(range){
-  if(!range){range=activeRangeKey==='custom'?null:computeRange(activeRangeKey);}
+  if(!range){range=activeRangeKey==='custom'?customRangeForSync():computeRange(activeRangeKey);}
   if(!range){alert('Elige un rango de fechas.');return;}
   const btn=document.getElementById('syncBtn');const prev=btn.textContent;
   btn.textContent='Sincronizando…';btn.disabled=true;
@@ -694,8 +704,9 @@ document.getElementById('cGo').onclick=()=>{
   if(!cf||!ct){alert('Elige fecha de inicio y fin.');return;}
   if(cf>ct){alert('La fecha de inicio es posterior a la de fin.');return;}
   const range=computeRange('custom',cf,ct);
-  const ex=DB.periods.find(p=>p.id===range.id && Object.keys(p[curRole]||{}).length);
-  if(ex){curPeriodId=ex.id;filterPerson='ALL';renderAll();}else{curPeriodId=null;syncRange(range);}
+  // Siempre re-sincroniza EN VIVO con Close (no reutiliza la foto guardada),
+  // para que un rango personalizado refleje el estado actual de los leads.
+  curPeriodId=null;syncRange(range);
 };
 document.getElementById('lbTitle').style.cursor='pointer';
 document.getElementById('dlBtn').onclick=downloadPDF;
